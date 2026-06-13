@@ -1,15 +1,10 @@
-from kafka import KafkaProducer
-import json
+%pip install faker
+
 import random
 import time
 from datetime import datetime
 
-producer = KafkaProducer(
-    bootstrap_servers='localhost:9092',
-    value_serializer=lambda v: json.dumps(v).encode('utf-8')
-)
-
-broker_statuses = ["HEALTHY", "WARNING", "CRITICAL"]
+from faker import Faker
 
 topics = [
     "sales-events",
@@ -17,20 +12,25 @@ topics = [
     "customer-events"
 ]
 
-print("Sending Kafka metrics to Kafka topic...")
+statuses = ["HEALTHY", "WARNING", "CRITICAL"]
 
 while True:
 
-    log = {
+    data = [{
         "topic": random.choice(topics),
-        "consumer_lag": random.randint(0, 5000),
-        "messages_per_second": random.randint(100, 10000),
-        "broker_status": random.choice(broker_statuses),
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+        "consumer_lag": random.randint(0,5000),
+        "messages_per_second": random.randint(100,10000),
+        "broker_status": random.choice(statuses),
+        "timestamp": str(datetime.now())
+    }]
 
-    producer.send("kafka-metrics", value=log)
+    df = spark.createDataFrame(data)
 
-    print(log)
+    df.write \
+      .format("delta") \
+      .mode("append") \
+      .saveAsTable("pipeline_monitoring.kafka_metrics_bronze")
 
-    time.sleep(4)
+    print("Kafka metric inserted")
+
+    time.sleep(5)

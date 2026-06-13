@@ -1,55 +1,46 @@
-from kafka import KafkaProducer
-from faker import Faker
-import json
+%pip install faker
+
 import random
 import time
 from datetime import datetime
 
-fake = Faker()
+from faker import Faker
 
-# Kafka Producer
-producer = KafkaProducer(
-    bootstrap_servers='localhost:9092',
-    value_serializer=lambda v: json.dumps(v).encode('utf-8')
-)
+fake = Faker()
 
 dag_ids = [
     "sales_pipeline",
     "inventory_pipeline",
-    "customer_pipeline",
-    "payment_pipeline"
+    "customer_pipeline"
 ]
 
 task_ids = [
-    "extract_data",
-    "transform_data",
-    "load_redshift",
-    "validate_data"
+    "extract",
+    "transform",
+    "load"
 ]
 
 statuses = ["SUCCESS", "FAILED", "RUNNING"]
 
-print("Sending Airflow logs to Kafka...")
-
 while True:
 
-    status = random.choices(
-        statuses,
-        weights=[70, 20, 10]
-    )[0]
-
-    log = {
+    data = [{
         "dag_id": random.choice(dag_ids),
         "task_id": random.choice(task_ids),
-        "status": status,
+        "status": random.choice(statuses),
         "runtime_seconds": random.randint(50, 500),
         "retry_count": random.randint(0, 3),
         "owner": fake.user_name(),
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+        "timestamp": str(datetime.now())
+    }]
 
-    producer.send("airflow-logs", value=log)
+    df = spark.createDataFrame(data)
 
-    print(log)
+    df.write \
+      .format("delta") \
+      .mode("append") \
+      .saveAsTable("pipeline_monitoring.airflow_bronze")
 
-    time.sleep(2)
+    print("Airflow log inserted")
+
+    time.sleep(5)
