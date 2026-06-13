@@ -1,50 +1,27 @@
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
-from pyspark.sql.types import *
 
-# Create Spark Session
-spark = SparkSession.builder \
-    .appName("SparkConsumer") \
-    .master("local[*]") \
-    .config(
-        "spark.jars.packages",
-        "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"
-    ) \
-    .getOrCreate()
+# Read Streaming Data From Bronze Table
+df = spark.readStream.table(
+    "pipeline_monitoring.spark_bronze"
+)
 
-spark.sparkContext.setLogLevel("ERROR")
+# Basic Transformations
+processed_df = df.withColumn(
+    "high_cpu_usage",
+    when(col("cpu_usage_percent") > 80, 1).otherwise(0)
+).withColumn(
+    "long_runtime",
+    when(col("runtime_seconds") > 500, 1).otherwise(0)
+)
 
-# Read Kafka Stream
-df = spark.readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
-    .option("subscribe", "spark-logs") \
-    .option("startingOffsets", "latest") \
-    .load()
-
-# Convert binary to string
-json_df = df.selectExpr("CAST(value AS STRING)")
-
-# Define Schema
-schema = StructType([
-    StructField("job_id", StringType(), True),
-    StructField("executor_memory_gb", IntegerType(), True),
-    StructField("cpu_usage_percent", IntegerType(), True),
-    StructField("records_processed", IntegerType(), True),
-    StructField("job_status", StringType(), True),
-    StructField("runtime_seconds", IntegerType(), True),
-    StructField("timestamp", StringType(), True)
-])
-
-# Parse JSON
-parsed_df = json_df.select(
-    from_json(col("value"), schema).alias("data")
-).select("data.*")
-
-# Print Stream
-query = parsed_df.writeStream \
+# Write Stream To Silver Table
+query = processed_df.writeStream \
+    .format("delta") \
     .outputMode("append") \
-    .format("console") \
-    .start()
+    .option(
+        "checkpointLocation",
+        "/tmp/checkpoints/spark_silver"
+    ) \
+    .toTable("pipeline_monitoring.spark_silver")
 
 query.awaitTermination()

@@ -1,48 +1,27 @@
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
-from pyspark.sql.types import *
 
-# Create Spark Session
-spark = SparkSession.builder \
-    .appName("KafkaMetricsConsumer") \
-    .master("local[*]") \
-    .config(
-        "spark.jars.packages",
-        "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"
-    ) \
-    .getOrCreate()
+# Read Streaming Data From Bronze Table
+df = spark.readStream.table(
+    "pipeline_monitoring.kafka_metrics_bronze"
+)
 
-spark.sparkContext.setLogLevel("ERROR")
+# Basic Transformations
+processed_df = df.withColumn(
+    "high_consumer_lag",
+    when(col("consumer_lag") > 3000, 1).otherwise(0)
+).withColumn(
+    "broker_critical",
+    when(col("broker_status") == "CRITICAL", 1).otherwise(0)
+)
 
-# Read Kafka Stream
-df = spark.readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
-    .option("subscribe", "kafka-metrics") \
-    .option("startingOffsets", "latest") \
-    .load()
-
-# Convert binary to string
-json_df = df.selectExpr("CAST(value AS STRING)")
-
-# Define Schema
-schema = StructType([
-    StructField("topic", StringType(), True),
-    StructField("consumer_lag", IntegerType(), True),
-    StructField("messages_per_second", IntegerType(), True),
-    StructField("broker_status", StringType(), True),
-    StructField("timestamp", StringType(), True)
-])
-
-# Parse JSON
-parsed_df = json_df.select(
-    from_json(col("value"), schema).alias("data")
-).select("data.*")
-
-# Print Stream
-query = parsed_df.writeStream \
+# Write Stream To Silver Table
+query = processed_df.writeStream \
+    .format("delta") \
     .outputMode("append") \
-    .format("console") \
-    .start()
+    .option(
+        "checkpointLocation",
+        "/tmp/checkpoints/kafka_metrics_silver"
+    ) \
+    .toTable("pipeline_monitoring.kafka_metrics_silver")
 
 query.awaitTermination()

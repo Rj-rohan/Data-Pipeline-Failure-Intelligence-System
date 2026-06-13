@@ -1,50 +1,27 @@
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
-from pyspark.sql.types import *
 
-# Create Spark Session
-spark = SparkSession.builder \
-    .appName("AirflowConsumer") \
-    .master("local[*]") \
-    .config(
-        "spark.jars.packages",
-        "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0"
-    ) \
-    .getOrCreate()
+# Read Streaming Data From Bronze Table
+df = spark.readStream.table(
+    "pipeline_monitoring.airflow_bronze"
+)
 
-spark.sparkContext.setLogLevel("ERROR")
+# Basic Transformations
+processed_df = df.withColumn(
+    "is_failed",
+    when(col("status") == "FAILED", 1).otherwise(0)
+).withColumn(
+    "is_long_running",
+    when(col("runtime_seconds") > 300, 1).otherwise(0)
+)
 
-# Read Kafka Stream
-df = spark.readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
-    .option("subscribe", "airflow-logs") \
-    .option("startingOffsets", "latest") \
-    .load()
-
-# Convert binary to string
-json_df = df.selectExpr("CAST(value AS STRING)")
-
-# Define Schema
-schema = StructType([
-    StructField("dag_id", StringType(), True),
-    StructField("task_id", StringType(), True),
-    StructField("status", StringType(), True),
-    StructField("runtime_seconds", IntegerType(), True),
-    StructField("retry_count", IntegerType(), True),
-    StructField("owner", StringType(), True),
-    StructField("timestamp", StringType(), True)
-])
-
-# Parse JSON
-parsed_df = json_df.select(
-    from_json(col("value"), schema).alias("data")
-).select("data.*")
-
-# Print Stream
-query = parsed_df.writeStream \
+# Write Stream To Silver Table
+query = processed_df.writeStream \
+    .format("delta") \
     .outputMode("append") \
-    .format("console") \
-    .start()
+    .option(
+        "checkpointLocation",
+        "/tmp/checkpoints/airflow_silver"
+    ) \
+    .toTable("pipeline_monitoring.airflow_silver")
 
 query.awaitTermination()
